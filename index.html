@@ -72,6 +72,33 @@
   .foot{color:var(--dim);font-size:12px;margin-top:24px;border-top:1px solid var(--line);padding-top:14px}
   .hidden{display:none}
   a{color:var(--accent)}
+  .sec-h{font-size:12px;margin:18px 0 8px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;font-weight:600}
+  .verdict{border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:6px;background:var(--panel)}
+  .verdict .badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px;
+    text-transform:uppercase;letter-spacing:.04em;margin-bottom:9px}
+  .badge.high{background:#3a1312;color:var(--bad)} .badge.med{background:#2a2410;color:var(--acc)} .badge.low{background:#12351f;color:var(--ok)}
+  .verdict h3{margin:0 0 4px;font-size:16px}
+  .findings{list-style:none;padding:0;margin:10px 0 0}
+  .findings li{display:flex;gap:9px;padding:6px 0;font-size:13px;border-top:1px solid #20262f}
+  .findings li .dot{width:8px;height:8px;border-radius:50%;margin-top:6px;flex:0 0 auto}
+  .dot.high{background:var(--bad)} .dot.med{background:var(--acc)} .dot.info{background:var(--accent)}
+  table.keytab{font-size:12px;width:auto}
+  table.keytab th{text-align:left;color:var(--dim);font-weight:500;border-bottom:1px solid var(--line);padding:4px 10px}
+  table.keytab td{border-bottom:1px solid #20262f;padding:3px 10px}
+  .kv{font-family:var(--mono);cursor:pointer;border-bottom:1px dotted #39414d}
+  .kv.known{color:var(--acc)} .kn{color:var(--acc);font-size:11px} .mono2{font-family:var(--mono);color:var(--dim)}
+  .copyable{cursor:pointer}
+  .searchbar{display:flex;gap:8px;margin:8px 0 10px}
+  #search{flex:1;background:var(--panel);color:var(--txt);border:1px solid var(--line);border-radius:8px;
+    padding:8px 11px;font-family:var(--mono);font-size:12.5px}
+  .searchres{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+  .hit{font-size:11.5px;padding:3px 8px} .dimr{color:var(--dim);font-size:11px}
+  tr.flash td{animation:flash 1.4s ease}
+  @keyframes flash{0%,100%{background:transparent}18%{background:#243447}}
+  #toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(20px);
+    background:#0b0f14;border:1px solid var(--line);color:var(--txt);padding:8px 16px;border-radius:8px;
+    font-size:13px;opacity:0;pointer-events:none;transition:.2s;z-index:50}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 </style>
 </head>
 <body>
@@ -107,8 +134,18 @@
       <span><i class="sw" style="background:var(--gpb)"></i>GPB</span>
       <span><i class="sw" style="background:var(--val)"></i>Value block</span>
     </div>
+    <div class="searchbar">
+      <input id="search" placeholder="Search hex (DE AD BE) or text (HELLO)…">
+      <button id="searchBtn">Find</button>
+    </div>
+    <div class="searchres" id="searchRes"></div>
+    <div id="security"></div>
+    <div id="keytable"></div>
+    <h3 class="sec-h">Memory</h3>
     <div id="sectors"></div>
   </div>
+
+  <div id="toast"></div>
 
   <div class="foot">
     Decodes the manufacturer block (UID / BCC / SAK / ATQA), every sector trailer (Key A, access-condition bits with integrity check, Key B, GPB), and flags value blocks. For decoding cards you own. MIFARE Classic's Crypto1 cipher is broken, so treat these cards as readable, not secure.
@@ -135,6 +172,18 @@ const TRAIL_AC={ // [readKeyA, writeKeyA, readAccess, writeAccess, readKeyB, wri
  '101':['—','—','A|B','B','—','—'],     '111':['—','—','A|B','—','—','—']
 };
 const TRAIL_NOTE={'001':'transport / default','000':'Key B readable (usable as data)'};
+
+// ---- well-known / publicly-published keys (subset of the standard dictionary) ----
+const KNOWN_KEYS={
+ 'FFFFFFFFFFFF':'default / transport','000000000000':'all zeros',
+ 'A0A1A2A3A4A5':'MAD key (public)','D3F7D3F7D3F7':'NDEF key (public)',
+ 'B0B1B2B3B4B5':'common','4D3A99C351DD':'common','1A982C7E459A':'common',
+ 'AABBCCDDEEFF':'common','714C5C886E97':'common','587EE5F9350F':'common',
+ 'A0478CC39091':'common','533CB6C723F6':'common','8FD0A4F256E9':'common',
+ 'A64598A77478':'common','0297927C0F77':'common','EE0042F88840':'common',
+ '722BFCC5375F':'common','F1D83F964314':'common','54726176656C':'transit ("Travel")',
+ '5C8FF9990DA2':'common','1466FC2113CA':'common','7C9FB8474242':'common'
+};
 
 let CURRENT=null; // parsed model
 
@@ -226,6 +275,100 @@ function parse(bytes){
   return {bytes,sectors,manuf:{uid4,bcc,bccCalc,bccOk:bcc===bccCalc,sak:hx(sak),atqa}};
 }
 
+// ---------- security assessment ----------
+function sectorKeys(sec){
+  const t=sec.blocks[3].data;
+  return {kA:[...t.slice(0,6)].map(hx).join(''), kB:[...t.slice(10,16)].map(hx).join(''), t};
+}
+function renderSecurity(m){
+  const F=[]; const known=[], valueBlocks=[], readableB=[], openData=[];
+  m.sectors.forEach(sec=>{
+    const {kA,kB,t}=sectorKeys(sec);
+    if(KNOWN_KEYS[kA]||KNOWN_KEYS[kB]) known.push(sec.s);
+    const {codes}=decodeAccess(t);
+    if(['000','010','001'].includes(codes[3])) readableB.push(sec.s);
+    for(let i=0;i<3;i++){ if(codes[i]==='000'){ openData.push(sec.s); break; } }
+    sec.blocks.forEach(b=>{
+      if(b.bi===3 || (sec.s===0&&b.bi===0)) return;
+      if(valueBlock(b.data)) valueBlocks.push(b.abs);
+    });
+  });
+  let sev,title,sub;
+  if(known.length===16){ sev='high'; title='Fully exposed';
+    sub='Every sector key is publicly known, so any standard reader dumps and clones this card with no cracking at all.'; }
+  else if(known.length>0){ sev='high'; title='Largely exposed';
+    sub=`${known.length} of 16 sector keys are publicly known. From any one known key the rest fall to the nested attack, so treat the whole card as readable.`; }
+  else { sev='med'; title='Custom keys — still clonable';
+    sub='No publicly-known keys matched, so it is not dictionary-readable. But Crypto1 itself is broken (darkside / hardnested recover keys anyway), so treat it as clonable, not secure.'; }
+
+  if(known.length) F.push(['high',`<b>${known.length} sector(s) use publicly-known keys</b> — ${known.length===16?'all sectors':'sector(s) '+known.join(', ')}. Read by any tool's built-in dictionary.`]);
+  if(!m.manuf.bccOk) F.push(['med',`<b>UID check byte (BCC) doesn't match</b> — a common sign of a "magic" (rewritable-UID) clone card, or a non-4-byte UID.`]);
+  if(valueBlocks.length) F.push(['info',`<b>Value block(s)</b> at block ${valueBlocks.join(', ')} — a stored-value structure. If this card holds a balance it can be rewritten once the key is known.`]);
+  if(openData.length) F.push(['med',`<b>Factory-default access</b> in sector(s) ${[...new Set(openData)].join(', ')} — data is freely read and written with the sector key (transport config).`]);
+  if(readableB.length) F.push(['info',`<b>Key B readable as data</b> in sector(s) ${readableB.join(', ')} — in this access config Key B is not a secret.`]);
+  F.push(['info',`<b>Crypto1 is broken and the UID is rewritable on "magic" cards</b> — structural to MIFARE Classic. Anything trusting this card, or its UID, for security can be cloned.`]);
+
+  const li=F.map(([s,t])=>`<li><span class="dot ${s}"></span><span>${t}</span></li>`).join('');
+  const lab=sev==='high'?'high risk':(sev==='med'?'weak':'ok');
+  $('#security').innerHTML=`<h3 class="sec-h">Security assessment</h3>
+    <div class="verdict"><span class="badge ${sev}">${lab}</span>
+      <h3>${title}</h3><div style="color:var(--dim);font-size:13px">${sub}</div>
+      <ul class="findings">${li}</ul></div>`;
+}
+
+function renderKeyTable(m){
+  const cell=(k)=>{const n=KNOWN_KEYS[k];
+    return `<span class="kv ${n?'known':''}" data-copy="${k}" data-label="key">${k}</span>`;};
+  let rows='<table class="keytab"><tr><th>Sector</th><th>Key A</th><th></th><th>Key B</th><th></th><th>Access</th></tr>';
+  m.sectors.forEach(sec=>{
+    const {kA,kB,t}=sectorKeys(sec);
+    const acc=[...t.slice(6,9)].map(hx).join('');
+    rows+=`<tr><td>${sec.s}</td><td>${cell(kA)}</td><td class="kn">${KNOWN_KEYS[kA]||''}</td>`+
+          `<td>${cell(kB)}</td><td class="kn">${KNOWN_KEYS[kB]||''}</td><td class="mono2">${acc}</td></tr>`;
+  });
+  $('#keytable').innerHTML='<h3 class="sec-h">Keys</h3>'+rows+'</table>';
+}
+
+// ---------- copy + toast ----------
+let toastT;
+function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('show');
+  clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),1400);}
+function copy(text,label){
+  const done=()=>toast('Copied '+(label||'value'));
+  if(navigator.clipboard&&navigator.clipboard.writeText)
+    navigator.clipboard.writeText(text).then(done).catch(()=>fallbackCopy(text,done));
+  else fallbackCopy(text,done);
+}
+function fallbackCopy(text,cb){const ta=document.createElement('textarea');ta.value=text;
+  ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();
+  try{document.execCommand('copy');}catch(e){}document.body.removeChild(ta);cb&&cb();}
+
+// ---------- search ----------
+function runSearch(){
+  const q=$('#search').value.trim(); const res=$('#searchRes'); res.innerHTML='';
+  if(!q||!CURRENT) return;
+  const data=CURRENT.bytes, matches=[], seen=new Set();
+  const add=(off,kind)=>{const k=off+'/'+kind; if(!seen.has(k)){seen.add(k);matches.push({off,kind});}};
+  const hq=q.replace(/0x/gi,'').replace(/[^0-9a-fA-F]/g,'');
+  if(hq.length>=2 && hq.length%2===0){
+    const needle=[]; for(let i=0;i<hq.length;i+=2) needle.push(parseInt(hq.substr(i,2),16));
+    for(let o=0;o<=data.length-needle.length;o++){
+      let ok=true; for(let i=0;i<needle.length;i++) if(data[o+i]!==needle[i]){ok=false;break;}
+      if(ok) add(o,'hex');
+    }
+  }
+  for(let o=0;o<=data.length-q.length;o++){
+    let ok=true; for(let i=0;i<q.length;i++) if(data[o+i]!==q.charCodeAt(i)){ok=false;break;}
+    if(ok) add(o,'text');
+  }
+  if(!matches.length){ res.innerHTML='<span class="dimr">no matches</span>'; return; }
+  matches.sort((a,b)=>a.off-b.off);
+  res.innerHTML=matches.slice(0,60).map(mm=>{
+    const blk=Math.floor(mm.off/16), sec=Math.floor(blk/4), boff=mm.off%16;
+    return `<button class="hit" data-blk="${blk}">sec ${sec} · blk ${blk} · +${boff} <span class="dimr">(${mm.kind})</span></button>`;
+  }).join('') + (matches.length>60?`<span class="dimr"> +${matches.length-60} more</span>`:'');
+}
+
 // ---------- rendering ----------
 function hexSpans(data,classes){
   let s='';
@@ -258,13 +401,17 @@ function render(model){
   const m=model.manuf;
   const bccPill=m.bccOk?'<span class="pill ok">valid</span>':`<span class="pill bad">bad → ${hx(m.bccCalc)}</span>`;
   $('#summary').innerHTML=[
-    ['UID (4-byte)',m.uid4],
+    ['UID (4-byte)',`<span class="copyable" data-copy="${m.uid4}" data-label="UID">${m.uid4}</span>`],
     ['BCC',hx(m.bcc)+' '+bccPill],
     ['SAK',m.sak],
     ['ATQA',m.atqa],
     ['Type','MIFARE Classic 1K'],
     ['Size','1024 bytes · 16 sectors']
   ].map(([k,v])=>`<div><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+
+  renderSecurity(model);
+  renderKeyTable(model);
+  $('#search').value=''; $('#searchRes').innerHTML='';
 
   const host=$('#sectors'); host.innerHTML='';
   model.sectors.forEach(sec=>{
@@ -291,8 +438,9 @@ function render(model){
       if(sec.s===0&&b.bi===0) label='<span class="lab" style="background:#10303a;color:var(--uid)">manufacturer</span>';
       else if(isTrailer) label='<span class="lab" style="background:#20250f;color:var(--acc)">sector trailer</span>';
       else if(vb) label=`<span class="lab" style="background:#2a1d3a;color:var(--val)">value block</span>value = ${vb.value} (0x${vb.uvalue.toString(16).toUpperCase().padStart(8,'0')}) · addr 0x${hx(vb.addr)}`;
-      rows+=`<tr class="blk hex"><td>blk ${b.abs} <span style="color:#596674">·${b.bi}</span></td>
-        <td>${hexSpans(b.data,cls)}</td>
+      const plain=[...b.data].map(hx).join('');
+      rows+=`<tr class="blk hex" id="blk-${b.abs}"><td>blk ${b.abs} <span style="color:#596674">·${b.bi}</span></td>
+        <td class="copyable" data-copy="${plain}" data-label="block ${b.abs}" title="click to copy">${hexSpans(b.data,cls)}</td>
         <td class="ascii">${asciiStr(b.data).replace(/</g,'&lt;')}</td></tr>`;
       if(label) rows+=`<tr><td></td><td class="tag" colspan="2">${label}</td></tr>`;
     });
@@ -399,6 +547,22 @@ $('#pasteToggle').addEventListener('click',()=>{
 $('#parseHex').addEventListener('click',()=>{
   try{ handleBytes(parseHexString($('#hex').value)); }
   catch(e){ showErr(e.message); }
+});
+
+// search
+$('#searchBtn').addEventListener('click',runSearch);
+$('#search').addEventListener('keydown',e=>{ if(e.key==='Enter') runSearch(); });
+$('#searchRes').addEventListener('click',e=>{
+  const b=e.target.closest('.hit'); if(!b) return;
+  const row=document.getElementById('blk-'+b.dataset.blk); if(!row) return;
+  const sector=row.closest('.sector'); if(sector) sector.classList.remove('collapsed');
+  row.scrollIntoView({behavior:'smooth',block:'center'});
+  row.classList.add('flash'); setTimeout(()=>row.classList.remove('flash'),1500);
+});
+// click-to-copy (UID, keys, blocks) via delegation
+$('#out').addEventListener('click',e=>{
+  const el=e.target.closest('[data-copy]'); if(!el) return;
+  copy(el.getAttribute('data-copy'), el.getAttribute('data-label')||'value');
 });
 
 // ---- exports ----

@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MIFARE Classic 1K Decoder</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c2330; --line:#2a313c;
+    --txt:#e6edf3; --dim:#8b949e; --accent:#58a6ff;
+    --keyA:#3fb950; --acc:#d29922; --keyB:#58a6ff; --gpb:#bc8cff;
+    --uid:#56d4dd; --bcc:#db6d28; --sak:#f778ba; --atqa:#a5d6ff;
+    --ok:#3fb950; --bad:#f85149; --val:#d2a8ff;
+    --mono:"SF Mono",ui-monospace,"Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.5;padding:24px;}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 2px;letter-spacing:-.01em}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:20px}
+  .sub code{background:var(--panel2);padding:1px 5px;border-radius:4px;font-family:var(--mono);font-size:12px}
+  .drop{border:1.5px dashed var(--line);border-radius:12px;padding:26px;text-align:center;
+    background:var(--panel);transition:.15s;cursor:pointer}
+  .drop.hot{border-color:var(--accent);background:#132030}
+  .drop b{color:var(--accent)}
+  .drop .hint{color:var(--dim);font-size:12.5px;margin-top:6px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;align-items:center}
+  button,.btn{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+    border-radius:8px;padding:8px 13px;font-size:13px;cursor:pointer;transition:.12s}
+  button:hover,.btn:hover{border-color:var(--accent);color:var(--accent)}
+  button.primary{background:var(--accent);color:#06131f;border-color:var(--accent);font-weight:600}
+  button.primary:hover{opacity:.9;color:#06131f}
+  textarea{width:100%;min-height:74px;background:var(--panel);color:var(--txt);border:1px solid var(--line);
+    border-radius:8px;padding:10px;font-family:var(--mono);font-size:12px;resize:vertical;margin-top:10px}
+  .err{color:var(--bad);font-size:13px;margin-top:10px;display:none}
+  .summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
+    background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:20px 0}
+  .summary div{background:var(--panel);padding:11px 13px}
+  .summary .k{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+  .summary .v{font-family:var(--mono);font-size:15px;margin-top:3px;word-break:break-all}
+  .pill{font-size:11px;padding:1px 7px;border-radius:20px;font-weight:600;vertical-align:middle}
+  .pill.ok{background:#12351f;color:var(--ok)} .pill.bad{background:#3a1312;color:var(--bad)}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin:0 0 16px}
+  .legend span{display:inline-flex;align-items:center;gap:5px}
+  .sw{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .sector{background:var(--panel);border:1px solid var(--line);border-radius:10px;margin-bottom:12px;overflow:hidden}
+  .shead{display:flex;justify-content:space-between;align-items:center;padding:9px 14px;
+    background:var(--panel2);cursor:pointer;user-select:none}
+  .shead h3{margin:0;font-size:13.5px}
+  .shead .meta{color:var(--dim);font-size:12px;font-family:var(--mono)}
+  .sbody{padding:4px 0}
+  .sector.collapsed .sbody{display:none}
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12.5px}
+  td,th{padding:4px 6px}
+  .blk td:first-child{color:var(--dim);white-space:nowrap;padding-left:14px;width:70px}
+  .hex b{padding:1px 0;border-radius:2px}
+  .hex .s0{color:var(--dim)} /* plain */
+  .bUID{color:var(--uid);font-weight:600}.bBCC{color:var(--bcc)}.bSAK{color:var(--sak)}
+  .bATQA{color:var(--atqa)}.bKA{color:var(--keyA);font-weight:600}.bACC{color:var(--acc);font-weight:600}
+  .bKB{color:var(--keyB);font-weight:600}.bGPB{color:var(--gpb);font-weight:600}.bVAL{color:var(--val)}
+  .ascii{color:var(--dim);padding-right:14px;text-align:right;white-space:pre}
+  .tag{font-size:10.5px;color:var(--dim);padding-left:14px}
+  .tag .lab{padding:1px 6px;border-radius:4px;margin-right:6px;font-weight:600}
+  .deco{padding:6px 14px 12px;font-size:12px;color:var(--dim)}
+  .deco table{font-size:11.5px;margin-top:4px}
+  .deco th{text-align:left;color:var(--dim);font-weight:500;border-bottom:1px solid var(--line)}
+  .deco td{border-bottom:1px solid #20262f}
+  .deco .mono{font-family:var(--mono);color:var(--txt)}
+  .warn{color:var(--acc)} .never{color:var(--bad)} .cond{color:var(--txt)}
+  .foot{color:var(--dim);font-size:12px;margin-top:24px;border-top:1px solid var(--line);padding-top:14px}
+  .hidden{display:none}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>MIFARE Classic 1K Decoder</h1>
+  <div class="sub">Drop a 1024-byte dump (<code>.mfd</code> / <code>.dump</code> / <code>.bin</code>) from <code>nfc-mfclassic</code>, Proxmark3, or any reader — or paste hex. Everything runs locally in your browser; nothing is uploaded.</div>
+
+  <div class="drop" id="drop">
+    <div><b>Drop dump file here</b> or click to browse</div>
+    <div class="hint">1024 bytes · 16 sectors × 4 blocks × 16 bytes</div>
+    <input type="file" id="file" class="hidden" accept=".mfd,.dump,.bin,.dmp,.eml,.json,.txt,application/octet-stream">
+  </div>
+  <div class="row">
+    <button id="pasteToggle">Paste hex instead</button>
+    <button id="demo">Load demo card</button>
+    <button id="exportTxt" class="hidden">Export report (.txt)</button>
+    <button id="exportJson" class="hidden">Export JSON</button>
+  </div>
+  <textarea id="hex" class="hidden" placeholder="Paste 2048 hex characters (spaces, colons, 0x and line breaks are ignored)..."></textarea>
+  <div class="row hidden" id="hexRow"><button id="parseHex" class="primary">Decode hex</button></div>
+  <div class="err" id="err"></div>
+
+  <div id="out" class="hidden">
+    <div class="summary" id="summary"></div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--uid)"></i>UID</span>
+      <span><i class="sw" style="background:var(--bcc)"></i>BCC</span>
+      <span><i class="sw" style="background:var(--sak)"></i>SAK</span>
+      <span><i class="sw" style="background:var(--atqa)"></i>ATQA</span>
+      <span><i class="sw" style="background:var(--keyA)"></i>Key A</span>
+      <span><i class="sw" style="background:var(--acc)"></i>Access bits</span>
+      <span><i class="sw" style="background:var(--keyB)"></i>Key B</span>
+      <span><i class="sw" style="background:var(--gpb)"></i>GPB</span>
+      <span><i class="sw" style="background:var(--val)"></i>Value block</span>
+    </div>
+    <div id="sectors"></div>
+  </div>
+
+  <div class="foot">
+    Decodes the manufacturer block (UID / BCC / SAK / ATQA), every sector trailer (Key A, access-condition bits with integrity check, Key B, GPB), and flags value blocks. For decoding cards you own. MIFARE Classic's Crypto1 cipher is broken, so treat these cards as readable, not secure.
+  </div>
+</div>
+
+<script>
+"use strict";
+const $=s=>document.querySelector(s);
+const HEXCHARS=/[^0-9a-fA-F]/g;
+
+// ---- access condition lookup tables (code = C1 C2 C3) ----
+const DATA_AC={ // [read, write, increment, dec/transfer/restore]
+ '000':['A|B','A|B','A|B','A|B'], '010':['A|B','—','—','—'],
+ '100':['A|B','B','—','—'],       '110':['A|B','B','B','A|B'],
+ '001':['A|B','—','—','A|B'],     '011':['B','B','—','—'],
+ '101':['B','—','—','—'],         '111':['—','—','—','—']
+};
+const DATA_NOTE={'001':'value-block config','000':'transport / default'};
+const TRAIL_AC={ // [readKeyA, writeKeyA, readAccess, writeAccess, readKeyB, writeKeyB]
+ '000':['—','A','A','—','A','A'],       '010':['—','—','A','—','A','—'],
+ '100':['—','B','A|B','—','—','B'],     '110':['—','—','A|B','—','—','—'],
+ '001':['—','A','A','A','A','A'],       '011':['—','B','A|B','B','—','B'],
+ '101':['—','—','A|B','B','—','—'],     '111':['—','—','A|B','—','—','—']
+};
+const TRAIL_NOTE={'001':'transport / default','000':'Key B readable (usable as data)'};
+
+let CURRENT=null; // parsed model
+
+function bytesFromInput(buf){
+  const b=new Uint8Array(buf);
+  return b;
+}
+function parseHexString(str){
+  const h=str.replace(/0x/gi,'').replace(HEXCHARS,'');
+  if(h.length%2) throw new Error('Hex has an odd number of characters ('+h.length+').');
+  const out=new Uint8Array(h.length/2);
+  for(let i=0;i<out.length;i++) out[i]=parseInt(h.substr(i*2,2),16);
+  return out;
+}
+function parseFlipper(text){ // Flipper Zero .nfc: "Block N: hh hh ..." lines, ?? = unread
+  const blocks={}, unknown=[];
+  text.split(/\r?\n/).forEach(line=>{
+    const m=line.match(/^\s*Block\s+(\d+):\s*(.+?)\s*$/);
+    if(!m) return;
+    const n=+m[1], toks=m[2].trim().split(/\s+/).slice(0,16);
+    if(toks.includes('??')) unknown.push(n);
+    blocks[n]=toks.map(t=>t==='??'?0:parseInt(t,16));
+  });
+  const nums=Object.keys(blocks).map(Number);
+  if(!nums.length) throw new Error('Flipper file had no Block lines.');
+  const total=Math.max(...nums)+1, out=new Uint8Array(total*16);
+  nums.forEach(n=>{ blocks[n].forEach((b,i)=>{ if(i<16) out[n*16+i]=b; }); });
+  return {bytes:out,unknown};
+}
+const hx=n=>n.toString(16).toUpperCase().padStart(2,'0');
+const ascii=b=>(b>=32&&b<=126)?String.fromCharCode(b):'.';
+
+function decodeAccess(t){ // t = 16-byte trailer
+  const b6=t[6],b7=t[7],b8=t[8];
+  const bit=(byte,p)=>(byte>>p)&1;
+  const c1=[bit(b7,4),bit(b7,5),bit(b7,6),bit(b7,7)];
+  const c2=[bit(b8,0),bit(b8,1),bit(b8,2),bit(b8,3)];
+  const c3=[bit(b8,4),bit(b8,5),bit(b8,6),bit(b8,7)];
+  const c1i=[bit(b6,0),bit(b6,1),bit(b6,2),bit(b6,3)];
+  const c2i=[bit(b6,4),bit(b6,5),bit(b6,6),bit(b6,7)];
+  const c3i=[bit(b7,0),bit(b7,1),bit(b7,2),bit(b7,3)];
+  let valid=true;
+  for(let i=0;i<4;i++){
+    if(c1[i]===c1i[i]||c2[i]===c2i[i]||c3[i]===c3i[i]){valid=false;}
+  }
+  const codes=[0,1,2,3].map(i=>`${c1[i]}${c2[i]}${c3[i]}`);
+  return {valid,codes};
+}
+
+function valueBlock(b){ // returns {value} if b is a valid value block else null
+  const u32=o=>(b[o]|(b[o+1]<<8)|(b[o+2]<<16)|(b[o+3]<<24))>>>0;
+  const v0=u32(0),v1=u32(4),v2=u32(8);
+  if(v0!==v2) return null;
+  if(v0!==(~v1>>>0)) return null;
+  const a=b[12],ia=b[13],aa=b[14],ib=b[15];
+  if(a!==aa) return null;
+  if(a!==(ia^0xFF)) return null;
+  if(a!==(ib^0xFF)) return null;
+  // signed interpretation
+  const signed=v0>0x7FFFFFFF?v0-0x100000000:v0;
+  return {value:signed,uvalue:v0,addr:a};
+}
+
+function parse(bytes){
+  if(bytes.length!==1024){
+    const sz=bytes.length;
+    let hint='';
+    if(sz===4096) hint=' This looks like a MIFARE Classic 4K dump (40 sectors); this tool decodes 1K.';
+    else if(sz===320) hint=' This looks like a MIFARE Mini (320 bytes).';
+    throw new Error(`Expected 1024 bytes, got ${sz}.`+hint);
+  }
+  const sectors=[];
+  for(let s=0;s<16;s++){
+    const blocks=[];
+    for(let bi=0;bi<4;bi++){
+      const abs=s*4+bi;
+      const off=abs*16;
+      blocks.push({abs,bi,off,data:bytes.slice(off,off+16)});
+    }
+    sectors.push({s,blocks});
+  }
+  // manufacturer block
+  const b0=bytes.slice(0,16);
+  const uid4=[...b0.slice(0,4)].map(hx).join('');
+  const bcc=b0[4];
+  const bccCalc=b0[0]^b0[1]^b0[2]^b0[3];
+  const sak=b0[5];
+  const atqa=[...b0.slice(6,8)].map(hx).join('');
+  return {bytes,sectors,manuf:{uid4,bcc,bccCalc,bccOk:bcc===bccCalc,sak:hx(sak),atqa}};
+}
+
+// ---------- rendering ----------
+function hexSpans(data,classes){
+  let s='';
+  for(let i=0;i<16;i++){
+    const c=classes?classes[i]:null;
+    s+= c ? `<b class="${c}">${hx(data[i])}</b>` : hx(data[i]);
+    s+= (i===7)?'  ':' ';
+  }
+  return s.trim();
+}
+function asciiStr(data){return [...data].map(ascii).join('');}
+
+function blockClasses(sectorIdx,bi,isTrailer,isValue){
+  const c=new Array(16).fill(null);
+  if(sectorIdx===0&&bi===0){ // manufacturer
+    for(let i=0;i<4;i++)c[i]='bUID'; c[4]='bBCC'; c[5]='bSAK'; c[6]=c[7]='bATQA';
+  }else if(isTrailer){
+    for(let i=0;i<6;i++)c[i]='bKA';
+    c[6]=c[7]=c[8]='bACC'; c[9]='bGPB';
+    for(let i=10;i<16;i++)c[i]='bKB';
+  }else if(isValue){
+    for(let i=0;i<16;i++)c[i]='bVAL';
+  }
+  return c;
+}
+
+function render(model){
+  CURRENT=model;
+  // summary
+  const m=model.manuf;
+  const bccPill=m.bccOk?'<span class="pill ok">valid</span>':`<span class="pill bad">bad → ${hx(m.bccCalc)}</span>`;
+  $('#summary').innerHTML=[
+    ['UID (4-byte)',m.uid4],
+    ['BCC',hx(m.bcc)+' '+bccPill],
+    ['SAK',m.sak],
+    ['ATQA',m.atqa],
+    ['Type','MIFARE Classic 1K'],
+    ['Size','1024 bytes · 16 sectors']
+  ].map(([k,v])=>`<div><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+
+  const host=$('#sectors'); host.innerHTML='';
+  model.sectors.forEach(sec=>{
+    const first=sec.s*4, last=sec.s*4+3;
+    const trailer=sec.blocks[3].data;
+    const ac=decodeAccess(trailer);
+    const keyA=[...trailer.slice(0,6)].map(hx).join('');
+    const keyB=[...trailer.slice(10,16)].map(hx).join('');
+    const gpb=hx(trailer[9]);
+
+    const el=document.createElement('div');
+    el.className='sector';
+    const acPill=ac.valid?'<span class="pill ok">bits OK</span>':'<span class="pill bad">bits inconsistent</span>';
+    el.innerHTML=`<div class="shead"><h3>Sector ${sec.s} ${acPill}</h3>
+      <span class="meta">blocks ${first}–${last} · KeyA ${keyA} · KeyB ${keyB}</span></div>`;
+
+    const body=document.createElement('div'); body.className='sbody';
+    let rows='<table>';
+    sec.blocks.forEach(b=>{
+      const isTrailer=b.bi===3;
+      const vb=(!isTrailer && !(sec.s===0&&b.bi===0)) ? valueBlock(b.data) : null;
+      const cls=blockClasses(sec.s,b.bi,isTrailer,!!vb);
+      let label='';
+      if(sec.s===0&&b.bi===0) label='<span class="lab" style="background:#10303a;color:var(--uid)">manufacturer</span>';
+      else if(isTrailer) label='<span class="lab" style="background:#20250f;color:var(--acc)">sector trailer</span>';
+      else if(vb) label=`<span class="lab" style="background:#2a1d3a;color:var(--val)">value block</span>value = ${vb.value} (0x${vb.uvalue.toString(16).toUpperCase().padStart(8,'0')}) · addr 0x${hx(vb.addr)}`;
+      rows+=`<tr class="blk hex"><td>blk ${b.abs} <span style="color:#596674">·${b.bi}</span></td>
+        <td>${hexSpans(b.data,cls)}</td>
+        <td class="ascii">${asciiStr(b.data).replace(/</g,'&lt;')}</td></tr>`;
+      if(label) rows+=`<tr><td></td><td class="tag" colspan="2">${label}</td></tr>`;
+    });
+    rows+='</table>';
+
+    // trailer decode detail
+    const note=TRAIL_NOTE[ac.codes[3]]?` · ${TRAIL_NOTE[ac.codes[3]]}`:'';
+    const cond=v=>v==='—'?'<span class="never">never</span>':`<span class="cond">key ${v}</span>`;
+    const t=TRAIL_AC[ac.codes[3]];
+    let deco=`<div class="deco"><div style="margin-bottom:4px">Access conditions — GPB <span class="mono">0x${gpb}</span>${note}</div><table>
+      <tr><th>Block</th><th>bits C1C2C3</th><th>read</th><th>write</th><th>increment</th><th>dec / transfer / restore</th></tr>`;
+    for(let i=0;i<3;i++){
+      const code=ac.codes[i], d=DATA_AC[code], n=DATA_NOTE[code]?` <span style="color:#596674">(${DATA_NOTE[code]})</span>`:'';
+      deco+=`<tr><td>${first+i}${n}</td><td class="mono">${code.split('').join(' ')}</td>
+        <td>${cond(d[0])}</td><td>${cond(d[1])}</td><td>${cond(d[2])}</td><td>${cond(d[3])}</td></tr>`;
+    }
+    deco+=`<tr><td>${last} <span style="color:#596674">(trailer)</span></td><td class="mono">${ac.codes[3].split('').join(' ')}</td>
+      <td colspan="4">
+        Key A: <span class="never">never readable</span>, write ${cond(t[1])} ·
+        Access: read ${cond(t[2])}, write ${cond(t[3])} ·
+        Key B: read ${cond(t[4])}, write ${cond(t[5])}
+      </td></tr>`;
+    deco+='</table></div>';
+
+    body.innerHTML=rows+deco;
+    el.appendChild(body);
+    el.querySelector('.shead').addEventListener('click',()=>el.classList.toggle('collapsed'));
+    host.appendChild(el);
+  });
+
+  $('#out').classList.remove('hidden');
+  $('#exportTxt').classList.remove('hidden');
+  $('#exportJson').classList.remove('hidden');
+  $('#err').style.display='none';
+  $('#out').scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+function showErr(msg){ const e=$('#err'); e.textContent=msg; e.style.display='block'; }
+
+function handleBytes(bytes){
+  try{ render(parse(bytes)); }
+  catch(e){ showErr(e.message); }
+}
+
+// try to read a file that might be binary OR a hex/eml text dump
+function handleFile(file){
+  const fr=new FileReader();
+  fr.onload=()=>{
+    const buf=fr.result;
+    const arr=new Uint8Array(buf);
+    // sniff: if it's exactly 1024/4096/320 bytes, treat as binary
+    if([1024,4096,320].includes(arr.length)){ handleBytes(arr); return; }
+    // else try to interpret as text (Flipper .nfc, Proxmark .eml, hex .txt, JSON)
+    const text=new TextDecoder().decode(arr);
+    try{
+      if(text.includes('Filetype: Flipper NFC') || /(^|\n)\s*Block\s+\d+:/.test(text)){
+        const {bytes,unknown}=parseFlipper(text);
+        render(parse(bytes));
+        if(unknown.length) showErr('Note: '+unknown.length+' Flipper block(s) had unread bytes (??), shown as 00: '+unknown.join(', '));
+        return;
+      }
+      if(text.trim().startsWith('{')){ // Proxmark/Flipper JSON often has "blocks"
+        const j=JSON.parse(text);
+        const blk=j.blocks||j.Blocks;
+        if(blk){
+          let all='';
+          Object.keys(blk).sort((a,b)=>+a-+b).forEach(k=>all+=blk[k]);
+          handleBytes(parseHexString(all)); return;
+        }
+      }
+      handleBytes(parseHexString(text));
+    }catch(e){ showErr('Could not read this file as a 1K dump or hex text. '+e.message); }
+  };
+  fr.readAsArrayBuffer(file);
+}
+
+// ---- demo card ----
+$('#demo').addEventListener('click',()=>{
+  const b=new Uint8Array(1024);
+  const uid=[0xDE,0xAD,0xBE,0xEF];
+  b.set(uid,0); b[4]=uid[0]^uid[1]^uid[2]^uid[3]; b[5]=0x08; b[6]=0x04; b[7]=0x00;
+  for(let i=8;i<16;i++)b[i]=0x62;
+  for(let s=0;s<16;s++){const t=(s*4+3)*16;for(let i=0;i<6;i++)b[t+i]=0xFF;
+    b[t+6]=0xFF;b[t+7]=0x07;b[t+8]=0x80;b[t+9]=0x69;for(let i=10;i<16;i++)b[t+i]=0xFF;}
+  const msg='HELLO MIFARE 1K'; for(let i=0;i<msg.length;i++)b[64+i]=msg.charCodeAt(i);
+  // value block in block 8 (sector 2) value=1000 addr=0x08
+  const o=8*16, v=1000, iv=(~v)>>>0;
+  const w=(off,val)=>{b[off]=val&0xFF;b[off+1]=(val>>>8)&0xFF;b[off+2]=(val>>>16)&0xFF;b[off+3]=(val>>>24)&0xFF;};
+  w(o,v); w(o+4,iv); w(o+8,v); b[o+12]=0x08;b[o+13]=0xF7;b[o+14]=0x08;b[o+15]=0xF7;
+  handleBytes(b);
+});
+
+// ---- wiring ----
+const drop=$('#drop'), fileIn=$('#file');
+drop.addEventListener('click',()=>fileIn.click());
+fileIn.addEventListener('change',e=>{ if(e.target.files[0]) handleFile(e.target.files[0]); });
+['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hot');}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hot');}));
+drop.addEventListener('drop',e=>{ if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
+
+$('#pasteToggle').addEventListener('click',()=>{
+  $('#hex').classList.toggle('hidden'); $('#hexRow').classList.toggle('hidden');
+});
+$('#parseHex').addEventListener('click',()=>{
+  try{ handleBytes(parseHexString($('#hex').value)); }
+  catch(e){ showErr(e.message); }
+});
+
+// ---- exports ----
+function reportText(){
+  const m=CURRENT.manuf; let L=[];
+  L.push('MIFARE Classic 1K — decoded report');
+  L.push('UID '+m.uid4+'  BCC '+hx(m.bcc)+(m.bccOk?' (valid)':' (BAD, calc '+hx(m.bccCalc)+')')+'  SAK '+m.sak+'  ATQA '+m.atqa);
+  L.push('');
+  CURRENT.sectors.forEach(sec=>{
+    const t=sec.blocks[3].data, ac=decodeAccess(t);
+    L.push(`== Sector ${sec.s} (blocks ${sec.s*4}-${sec.s*4+3}) ==`);
+    sec.blocks.forEach(b=>{
+      L.push(`  blk ${String(b.abs).padStart(2)} : ${[...b.data].map(hx).join(' ')}  |${asciiStr(b.data)}|`);
+    });
+    L.push(`  KeyA ${[...t.slice(0,6)].map(hx).join('')}  ACC ${[...t.slice(6,9)].map(hx).join('')}  GPB ${hx(t[9])}  KeyB ${[...t.slice(10,16)].map(hx).join('')}  [bits ${ac.valid?'OK':'INCONSISTENT'}]`);
+    L.push('');
+  });
+  return L.join('\n');
+}
+let DL=null, DL_TRIED=false;
+async function dl(name,text,type){
+  // Prefer the artifact host's download capability when running inside the viewer.
+  if(!DL_TRIED){ DL_TRIED=true; try{ DL=await window.claude.use('downloads'); }catch(e){ DL=null; } }
+  if(DL){
+    try{ await DL.save({filename:name,data:text}); return; }
+    catch(e){ /* viewer declined or failed — fall through to blob */ }
+  }
+  const blob=new Blob([text],{type:type||'text/plain'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click();
+  URL.revokeObjectURL(a.href);
+}
+$('#exportTxt').addEventListener('click',()=>dl('mifare_'+CURRENT.manuf.uid4+'.txt',reportText()));
+$('#exportJson').addEventListener('click',()=>{
+  const m=CURRENT.manuf;
+  const out={type:'MIFARE Classic 1K',uid:m.uid4,bcc:hx(m.bcc),bccValid:m.bccOk,sak:m.sak,atqa:m.atqa,sectors:[]};
+  CURRENT.sectors.forEach(sec=>{
+    const t=sec.blocks[3].data, ac=decodeAccess(t);
+    out.sectors.push({
+      sector:sec.s,
+      keyA:[...t.slice(0,6)].map(hx).join(''),
+      keyB:[...t.slice(10,16)].map(hx).join(''),
+      accessBytes:[...t.slice(6,9)].map(hx).join(''),
+      gpb:hx(t[9]),
+      accessBitsValid:ac.valid,
+      blockCodes:ac.codes,
+      blocks:sec.blocks.map(b=>[...b.data].map(hx).join(''))
+    });
+  });
+  dl('mifare_'+m.uid4+'.json',JSON.stringify(out,null,2),'application/json');
+});
+</script>
+</body>
+</html>

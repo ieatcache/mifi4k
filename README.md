@@ -15,6 +15,13 @@ Drop in a card dump and it decodes:
 - **Access conditions** — per-block read / write / increment / decrement
   permissions, expanded from the C1/C2/C3 bits
 - **Value blocks** — detected and decoded (value + address)
+- **Security assessment** — grades how exposed the card is: flags publicly-known
+  keys, factory-default access, readable Key B, value blocks, a mismatched BCC
+  (magic-card tell), and clonability
+- **Known-key labeling** — matches each sector's Key A/B against a dictionary of
+  published keys (default, MAD, NDEF, common/transit) with an all-keys table
+- **Search + copy** — find any hex or ASCII string across the dump and jump to it;
+  one-click copy for the UID, any key, or any block
 - Hex + ASCII view of all 16 sectors, with a text / JSON export
 
 ## Supported input formats

@@ -103,17 +103,18 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>MIFARE Classic 1K Decoder</h1>
-  <div class="sub">Drop a 1024-byte dump (<code>.mfd</code> / <code>.dump</code> / <code>.bin</code>) from <code>nfc-mfclassic</code>, Proxmark3, or any reader — or paste hex. Everything runs locally in your browser; nothing is uploaded.</div>
+  <h1>RFID Decoder — MIFARE Classic 1K + 125 kHz LF</h1>
+  <div class="sub">Drop a Flipper <code>.nfc</code> (13.56 MHz MIFARE Classic) or <code>.rfid</code> (125 kHz EM4100 / HID Prox) dump — also <code>.mfd</code> / <code>.bin</code> / <code>.eml</code> or pasted hex. It auto-detects the type. Everything runs locally in your browser; nothing is uploaded.</div>
 
   <div class="drop" id="drop">
     <div><b>Drop dump file here</b> or click to browse</div>
-    <div class="hint">1024 bytes · 16 sectors × 4 blocks × 16 bytes</div>
-    <input type="file" id="file" class="hidden" accept=".mfd,.dump,.bin,.dmp,.eml,.json,.txt,application/octet-stream">
+    <div class="hint">13.56 MHz MIFARE Classic 1K (.nfc) · 125 kHz LF RFID (.rfid)</div>
+    <input type="file" id="file" class="hidden" accept=".mfd,.dump,.bin,.dmp,.eml,.json,.txt,.nfc,.rfid,application/octet-stream">
   </div>
   <div class="row">
     <button id="pasteToggle">Paste hex instead</button>
-    <button id="demo">Load demo card</button>
+    <button id="demo">Demo MIFARE</button>
+    <button id="demoRfid">Demo RFID fob</button>
     <button id="exportTxt" class="hidden">Export report (.txt)</button>
     <button id="exportJson" class="hidden">Export JSON</button>
   </div>
@@ -143,6 +144,11 @@
     <div id="keytable"></div>
     <h3 class="sec-h">Memory</h3>
     <div id="sectors"></div>
+  </div>
+
+  <div id="lfout" class="hidden">
+    <div class="summary" id="lfsummary"></div>
+    <div id="lfdetail"></div>
   </div>
 
   <div id="toast"></div>
@@ -273,6 +279,58 @@ function parse(bytes){
   const sak=b0[5];
   const atqa=[...b0.slice(6,8)].map(hx).join('');
   return {bytes,sectors,manuf:{uid4,bcc,bccCalc,bccOk:bcc===bccCalc,sak:hx(sak),atqa}};
+}
+
+// ---------- 125 kHz LF RFID (Flipper .rfid) ----------
+function parseRfid(text){
+  let type='Unknown', bytes=[];
+  text.split(/\r?\n/).forEach(line=>{
+    let m=line.match(/^\s*Key type:\s*(.+?)\s*$/i); if(m) type=m[1].trim();
+    m=line.match(/^\s*Data:\s*(.+?)\s*$/i);
+    if(m) bytes=m[1].trim().split(/\s+/).map(t=>parseInt(t,16)).filter(n=>!isNaN(n));
+  });
+  return {type,bytes};
+}
+function lfTable(title,rows){
+  return `<h3 class="sec-h">${title}</h3><table class="keytab">`+
+    rows.map(([k,v])=>`<tr><td style="color:var(--dim)">${k}</td>`+
+      `<td class="mono2" style="color:var(--txt)">${v}</td></tr>`).join('')+'</table>';
+}
+function renderLF(tag){
+  const T=(tag.type||'').toUpperCase(), B=tag.bytes;
+  const rawHex=B.map(hx).join(''), rawSpaced=B.map(hx).join(' ');
+  const cards=[['Band','125 kHz (LF)'],['Protocol',tag.type||'Unknown'],
+    ['Raw data',`<span class="copyable" data-copy="${rawHex}" data-label="data">${rawSpaced||'—'}</span>`],
+    ['Bit length',B.length*8]];
+  $('#lfsummary').innerHTML=cards.map(([k,v])=>`<div><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+
+  let d='';
+  if(/EM41(00|02|05|0X)|EM410/.test(T) && B.length>=5){
+    const b0=B[0], id32=((B[1]<<24)|(B[2]<<16)|(B[3]<<8)|B[4])>>>0;
+    const hi=((B[1]<<8)|B[2])>>>0, lo=((B[3]<<8)|B[4])>>>0;
+    d=lfTable('EM4100 / EM410x',[
+      ['Customer / version ID',`${b0} (0x${hx(b0)})`],
+      ['32-bit card ID',`${id32}`],
+      ['DEZ 10',id32.toString().padStart(10,'0')],
+      ['DEZ 5.5',hi.toString().padStart(5,'0')+'.'+lo.toString().padStart(5,'0')],
+      ['40-bit hex',`<span class="copyable" data-copy="${rawHex}" data-label="ID">${rawHex}</span>`]
+    ])+`<div class="deco">The number printed on an EM4100 fob is usually the <b>DEZ 10</b> or the <b>40-bit hex</b>. These tags are read-only ID broadcasters with no authentication &mdash; trivially copied to a T5577 blank.</div>`;
+  } else if(/H10301/.test(T) && B.length>=3){
+    const fc=B[0], cn=((B[1]<<8)|B[2])>>>0;
+    d=lfTable('HID Proximity',[
+      ['Format','HID Prox H10301 (26-bit Wiegand)'],
+      ['Facility code',`${fc}`],
+      ['Card number',`${cn}`],
+      ['Payload hex',`<span class="copyable" data-copy="${rawHex}" data-label="payload">${rawHex}</span>`]
+    ])+`<div class="deco">26-bit Wiegand &mdash; 8-bit facility code + 16-bit card number (plus 2 parity bits). HID Prox has no authentication; the ID is clonable to a T5577 or compatible card.</div>`;
+  } else {
+    d=`<div class="deco">Recognized as <b>${tag.type||'an unknown protocol'}</b>. The raw payload is shown above; this protocol's field layout isn't broken out here yet. Most 125 kHz tags (Indala, AWID, IOProx, Paradox, FDX-B, Keri, etc.) are unauthenticated ID broadcasters &mdash; readable and clonable, with no key to recover.</div>`;
+  }
+  $('#lfdetail').innerHTML=d;
+  $('#lfout').classList.remove('hidden'); $('#out').classList.add('hidden');
+  $('#exportTxt').classList.add('hidden'); $('#exportJson').classList.add('hidden');
+  $('#err').style.display='none';
+  $('#lfout').scrollIntoView({behavior:'smooth',block:'start'});
 }
 
 // ---------- security assessment ----------
@@ -471,6 +529,7 @@ function render(model){
     host.appendChild(el);
   });
 
+  $('#lfout').classList.add('hidden');
   $('#out').classList.remove('hidden');
   $('#exportTxt').classList.remove('hidden');
   $('#exportJson').classList.remove('hidden');
@@ -496,6 +555,11 @@ function handleFile(file){
     // else try to interpret as text (Flipper .nfc, Proxmark .eml, hex .txt, JSON)
     const text=new TextDecoder().decode(arr);
     try{
+      if(text.includes('Filetype: Flipper RFID key') ||
+         (/^\s*Key type:/m.test(text) && /^\s*Data:/m.test(text) && !/Block\s+\d+:/.test(text))){
+        renderLF(parseRfid(text));
+        return;
+      }
       if(text.includes('Filetype: Flipper NFC') || /(^|\n)\s*Block\s+\d+:/.test(text)){
         const {bytes,unknown}=parseFlipper(text);
         render(parse(bytes));
@@ -533,6 +597,10 @@ $('#demo').addEventListener('click',()=>{
   handleBytes(b);
 });
 
+$('#demoRfid').addEventListener('click',()=>{
+  renderLF(parseRfid('Filetype: Flipper RFID key\nKey type: EM4100\nData: 1A 2B 3C 4D 5E\n'));
+});
+
 // ---- wiring ----
 const drop=$('#drop'), fileIn=$('#file');
 drop.addEventListener('click',()=>fileIn.click());
@@ -559,8 +627,8 @@ $('#searchRes').addEventListener('click',e=>{
   row.scrollIntoView({behavior:'smooth',block:'center'});
   row.classList.add('flash'); setTimeout(()=>row.classList.remove('flash'),1500);
 });
-// click-to-copy (UID, keys, blocks) via delegation
-$('#out').addEventListener('click',e=>{
+// click-to-copy (UID, keys, blocks, LF data) via delegation
+document.addEventListener('click',e=>{
   const el=e.target.closest('[data-copy]'); if(!el) return;
   copy(el.getAttribute('data-copy'), el.getAttribute('data-label')||'value');
 });
